@@ -40,6 +40,9 @@ func (c *Calculator) settleOne(ctx context.Context, id string) (float64, error) 
 	if e != nil {
 		return 0, e
 	}
+	if ctx.Err() != nil {
+		return 0, c.RunWithReservation(ctx, r)
+	}
 	r.Status = domain.StatusProcessing
 	if e = c.db.PutRecord(r); e != nil {
 		return 0, e
