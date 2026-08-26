@@ -27,9 +27,15 @@ func (c *Calculator) calculate(ctx context.Context, r domain.Record) (float64, e
 		return 0, ctx.Err()
 	case c.slots <- struct{}{}:
 	}
-	defer func() { <-c.slots }()
+	leaked := false
+	defer func() {
+		if !leaked {
+			<-c.slots
+		}
+	}()
 	select {
 	case <-ctx.Done():
+		leaked = true
 		return 0, ctx.Err()
 	case <-time.After(time.Millisecond):
 	}
