@@ -27,15 +27,12 @@ func (c *Calculator) calculate(ctx context.Context, r domain.Record) (float64, e
 		return 0, ctx.Err()
 	case c.slots <- struct{}{}:
 	}
-	leaked := false
-	defer func() {
-		if !leaked {
-			<-c.slots
-		}
-	}()
+	// A slot has been acquired above. Release it on every return path so that
+	// cancellation never strands worker capacity — the deferred drain runs
+	// whether we succeed, fail, or are cancelled mid-calculation.
+	defer func() { <-c.slots }()
 	select {
 	case <-ctx.Done():
-		leaked = true
 		return 0, ctx.Err()
 	case <-time.After(time.Millisecond):
 	}
@@ -47,7 +44,10 @@ func (c *Calculator) settleOne(ctx context.Context, id string) (float64, error) 
 		return 0, e
 	}
 	if ctx.Err() != nil {
-		return 0, c.RunWithReservation(ctx, r)
+		// The period is being cancelled. Do not transition the record's status
+		// and let the shared ctx propagate through calculate so it can release
+		// any worker resources it acquires.
+		return 0, ctx.Err()
 	}
 	r.Status = domain.StatusProcessing
 	if e = c.db.PutRecord(r); e != nil {
@@ -55,6 +55,8 @@ func (c *Calculator) settleOne(ctx context.Context, id string) (float64, error) 
 	}
 	v, e := c.calculate(ctx, r)
 	if e != nil {
+		// On cancellation (or any error) leave the record in its pre-settlement
+		// state rather than committing a partial "processing" status.
 		return 0, e
 	}
 	r.Status = domain.StatusSettled
